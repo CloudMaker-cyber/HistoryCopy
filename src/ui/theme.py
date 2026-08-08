@@ -55,6 +55,36 @@ QPushButton#btnClose:hover {{
     background: {c["danger"]};
     color: #FFFFFF;
 }}
+QPushButton#btnHeader {{
+    background: transparent;
+    border: 1px solid {c["divider"]};
+    border-radius: 6px;
+    padding: 0 10px;
+    color: {c["text_sub"]};
+    font-size: 12px;
+}}
+QPushButton#btnHeader:hover {{
+    border-color: {c["primary"]};
+    color: {c["primary"]};
+}}
+QCheckBox#cardCheck {{
+    spacing: 0;
+}}
+QCheckBox#cardCheck::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid {c["divider"]};
+    border-radius: 8px;
+    background: {c["card_bg"]};
+}}
+QCheckBox#cardCheck::indicator:checked {{
+    background: {c["primary"]};
+    border-color: {c["primary"]};
+}}
+QLabel#selInfo {{
+    color: {c["text_sub"]};
+    font-size: 12px;
+}}
 QScrollArea#cardScroll {{
     border: none;
     background: transparent;
@@ -109,7 +139,7 @@ QLabel#cardText {{
 }}
 QLabel#cardTime {{
     color: {c["text_sub"]};
-    font-size: 11px;
+    font-size: 10px;
 }}
 QLabel#cardImage {{
     border: 1px solid {c["divider"]};
@@ -139,6 +169,32 @@ QPushButton#btnMiniDanger {{
 QPushButton#btnMiniDanger:hover {{
     background: {c["danger"]};
     color: #FFFFFF;
+}}
+QPushButton#btnOcr {{
+    background: {c["primary"]};
+    border: 1px solid {c["primary"]};
+    border-radius: 6px;
+    padding: 3px 10px;
+    color: #FFFFFF;
+    font-size: 11px;
+}}
+QPushButton#btnOcr:hover {{
+    background: {c["primary_hover"]};
+}}
+QPushButton#btnOcr:disabled {{
+    background: {c["divider"]};
+    border-color: {c["divider"]};
+    color: {c["text_sub"]};
+}}
+QTextEdit#ocrText {{
+    border: 1px solid {c["divider"]};
+    border-radius: 6px;
+    background: {c["card_bg"]};
+    padding: 8px;
+    color: {c["text_main"]};
+    font-size: 12px;
+    selection-background-color: {c["primary"]};
+    selection-color: #FFFFFF;
 }}
 QLabel#emptyHint {{
     color: {c["text_sub"]};

@@ -2,7 +2,7 @@
 
 import os
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -20,9 +20,26 @@ from PySide6.QtWidgets import (
 from clipboard_monitor import set_clipboard_image, set_clipboard_text
 from storage import Storage
 from ui.card import HistoryCard
+from ui.ocr_dialog import OcrResultDialog
 from ui.preview import ImagePreviewDialog
 
 _LIST_LIMIT = 2000
+
+
+class _OcrWorker(QThread):
+    """后台执行图片文字识别,完成后带回结果,避免卡界面。"""
+
+    finished_ocr = Signal(int, str)
+
+    def __init__(self, item_id: int, image_path: str, parent=None):
+        super().__init__(parent)
+        self._item_id = item_id
+        self._image_path = image_path
+
+    def run(self):
+        from ocr import extract_text
+        text = extract_text(self._image_path)
+        self.finished_ocr.emit(self._item_id, text)
 
 
 class _DragHandle(QLabel):
@@ -46,6 +63,11 @@ class MainWindow(QWidget):
         self._storage = storage
         self._footer_text = "共 0 条记录"
         self._last_keyword = ""
+        self._selection_mode = False
+        self._selected_ids = set()
+        self._ocr_in_progress = set()
+        self._ocr_worker = None
+        self._ocr_item_id = None
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(200)
@@ -92,12 +114,38 @@ class MainWindow(QWidget):
         self._search.textChanged.connect(self.schedule_refresh)
         header.addWidget(self._search, 1)
 
+        self._btn_select = QPushButton("选择")
+        self._btn_select.setObjectName("btnHeader")
+        self._btn_select.setFixedHeight(28)
+        self._btn_select.clicked.connect(self._toggle_selection_mode)
+        header.addWidget(self._btn_select)
+
         btn_close = QPushButton("✕")
         btn_close.setObjectName("btnClose")
         btn_close.setFixedSize(28, 28)
         btn_close.clicked.connect(self.hide)
         header.addWidget(btn_close)
         shell_l.addLayout(header)
+
+        self._selection_bar = QHBoxLayout()
+        self._selection_bar.setSpacing(8)
+        self._sel_info = QLabel("")
+        self._sel_info.setObjectName("selInfo")
+        self._sel_info.setVisible(False)
+        self._btn_delete_selected = QPushButton("删除所选")
+        self._btn_delete_selected.setObjectName("btnMiniDanger")
+        self._btn_delete_selected.setFixedHeight(26)
+        self._btn_delete_selected.setVisible(False)
+        self._btn_delete_selected.clicked.connect(self._on_delete_selected)
+        self._btn_select_all = QPushButton("全选")
+        self._btn_select_all.setObjectName("btnMini")
+        self._btn_select_all.setFixedHeight(26)
+        self._btn_select_all.setVisible(False)
+        self._btn_select_all.clicked.connect(self._on_select_all)
+        self._selection_bar.addWidget(self._sel_info, 1)
+        self._selection_bar.addWidget(self._btn_select_all)
+        self._selection_bar.addWidget(self._btn_delete_selected)
+        shell_l.addLayout(self._selection_bar)
 
         self._scroll = QScrollArea()
         self._scroll.setObjectName("cardScroll")
@@ -150,6 +198,11 @@ class MainWindow(QWidget):
             card.pin_requested.connect(self._on_pin)
             card.delete_requested.connect(self._on_delete)
             card.preview_requested.connect(self._on_preview)
+            card.ocr_requested.connect(self._on_ocr_requested)
+            card.selection_toggled.connect(self._on_selection_toggled)
+            card.set_selection_mode(self._selection_mode)
+            if self._selection_mode:
+                card.set_checked(item["id"] in self._selected_ids)
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
             shown += 1
 
@@ -225,6 +278,114 @@ class MainWindow(QWidget):
         item = self._storage.get(item_id)
         if item and item["image_abs"] and os.path.exists(item["image_abs"]):
             ImagePreviewDialog(item["image_abs"], self).exec()
+
+    # --- 图像文字识别 ---
+
+    def _on_ocr_requested(self, item_id: int):
+        """点击"识别文字":命中缓存直接展示,否则后台识别。"""
+        if item_id in self._ocr_in_progress:
+            return
+        item = self._storage.get(item_id)
+        if not item or item["content_type"] != "image":
+            return
+        if not item["image_abs"] or not os.path.exists(item["image_abs"]):
+            self._footer.setText("图片文件缺失,无法识别")
+            return
+        cached = self._storage.get_ocr_text(item_id)
+        if cached:
+            OcrResultDialog(cached, self).exec()
+            return
+
+        card = self._find_card(item_id)
+        if card is not None:
+            card.set_ocr_busy(True)
+        self._ocr_in_progress.add(item_id)
+        worker = _OcrWorker(item_id, item["image_abs"])
+        worker.finished_ocr.connect(self._on_ocr_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._ocr_worker = worker
+        self._ocr_item_id = item_id
+        worker.start()
+
+    def _on_ocr_finished(self, item_id: int, text: str):
+        self._ocr_in_progress.discard(item_id)
+        card = self._find_card(item_id)
+        if card is not None:
+            card.set_ocr_busy(False)
+        if self._ocr_worker is not None:
+            self._ocr_worker = None
+        if not text:
+            self._footer.setText("未能识别出文字,请尝试更清晰的图片")
+            return
+        self._storage.set_ocr_text(item_id, text)
+        OcrResultDialog(text, self).exec()
+
+    def _find_card(self, item_id: int):
+        """在当前列表布局中找到指定记录对应的卡片组件。"""
+        count = self._list_layout.count()
+        for i in range(count):
+            widget = self._list_layout.itemAt(i).widget()
+            if isinstance(widget, HistoryCard) and widget.item["id"] == item_id:
+                return widget
+        return None
+
+    # --- 多选 / 批量删除 ---
+
+    def _toggle_selection_mode(self):
+        if not self._selection_mode and self._storage.count() == 0:
+            return
+        self._selection_mode = not self._selection_mode
+        if not self._selection_mode:
+            self._selected_ids.clear()
+        self._update_selection_ui()
+        self.refresh()
+
+    def _update_selection_ui(self):
+        active = self._selection_mode
+        self._btn_select.setText("取消" if active else "选择")
+        self._sel_info.setVisible(active)
+        self._btn_delete_selected.setVisible(active)
+        self._btn_select_all.setVisible(active)
+        if active:
+            self._update_selection_info()
+
+    def _update_selection_info(self):
+        n = len(self._selected_ids)
+        self._sel_info.setText("已选 %d 条" % n)
+
+    def _on_selection_toggled(self, item_id: int, checked: bool):
+        if checked:
+            self._selected_ids.add(item_id)
+        else:
+            self._selected_ids.discard(item_id)
+        self._update_selection_info()
+
+    def _on_select_all(self):
+        for i in range(self._list_layout.count()):
+            widget = self._list_layout.itemAt(i).widget()
+            if isinstance(widget, HistoryCard):
+                self._selected_ids.add(widget.item["id"])
+                widget.set_checked(True)
+        self._update_selection_info()
+
+    def _on_delete_selected(self):
+        if not self._selected_ids:
+            return
+        has_pinned = any(
+            self._storage.get(i) and self._storage.get(i)["is_pinned"]
+            for i in self._selected_ids)
+        total = len(self._selected_ids)
+        tip = ("确定要删除选中的 %d 条记录吗?" % total +
+               (("(包含置顶记录)" if has_pinned else "")))
+        answer = QMessageBox.question(
+            self, "删除确认", tip,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer == QMessageBox.Yes:
+            self._storage.delete_many(list(self._selected_ids))
+            self._selected_ids.clear()
+            self._selection_mode = False
+            self._update_selection_ui()
+            self.refresh()
 
     # --- 快捷键 ---
 

@@ -12,7 +12,7 @@ import threading
 
 from utils import db_path, images_dir, now_str, md5_hex
 
-_COLUMNS = ("id", "content_type", "content", "image_path",
+_COLUMNS = ("id", "content_type", "content", "image_path", "ocr_text",
             "created_at", "updated_at", "is_pinned", "pinned_at")
 
 
@@ -32,12 +32,17 @@ class Storage:
                 " content_type TEXT NOT NULL,"
                 " content TEXT,"
                 " image_path TEXT,"
+                " ocr_text TEXT,"
                 " fingerprint TEXT,"
                 " created_at TEXT NOT NULL,"
                 " updated_at TEXT NOT NULL,"
                 " is_pinned INTEGER NOT NULL DEFAULT 0,"
                 " pinned_at TEXT)"
             )
+            cols = {r[1] for r in self._conn.execute(
+                "PRAGMA table_info(clip_items)").fetchall()}
+            if "ocr_text" not in cols:
+                self._conn.execute("ALTER TABLE clip_items ADD COLUMN ocr_text TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_updated ON clip_items(updated_at)")
             self._conn.execute(
@@ -184,6 +189,43 @@ class Storage:
                     os.remove(full)
                 except OSError:
                     pass
+
+    def delete_many(self, item_ids: list) -> None:
+        """批量删除多条记录并清理对应图片文件。"""
+        ids = [i for i in item_ids if isinstance(i, int)]
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT image_path FROM clip_items WHERE id IN (%s)" % placeholders,
+                ids).fetchall()
+            self._conn.execute(
+                "DELETE FROM clip_items WHERE id IN (%s)" % placeholders, ids)
+            self._conn.commit()
+        for (path,) in rows:
+            if path:
+                full = os.path.join(images_dir(), path)
+                if os.path.exists(full):
+                    try:
+                        os.remove(full)
+                    except OSError:
+                        pass
+
+    def set_ocr_text(self, item_id: int, text: str) -> None:
+        """保存图片识别出的文字(为空则视为清除)。"""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE clip_items SET ocr_text=? WHERE id=?",
+                (text or "", item_id))
+            self._conn.commit()
+
+    def get_ocr_text(self, item_id: int) -> str:
+        """读取某条记录已识别的文字。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT ocr_text FROM clip_items WHERE id=?", (item_id,)).fetchone()
+        return (row[0] if row and row[0] else "") or ""
 
     def close(self) -> None:
         with self._lock:

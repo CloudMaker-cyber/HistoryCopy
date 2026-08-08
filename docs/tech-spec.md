@@ -10,9 +10,10 @@
 | 语言 | Python 3.11+ | 代码简单、易维护、打包方便,适合本项目 |
 | 图形界面 | PySide6 (Qt 6) | 支持卡片列表、托盘图标、无边框窗口、自定义主题(淡蓝色) |
 | 数据存储 | SQLite (内置 sqlite3) | 轻量、无需额外安装、单个文件易备份 |
-| 图片处理 | Pillow | 剪贴板图片读取与保存 |
 | 剪贴板监听 | Windows API `AddClipboardFormatListener` (ctypes) | 系统级事件监听,实时、低占用、不干扰用户 |
 | 剪贴板读写 | 文字用 Windows 剪贴板 API;图片用 Pillow | 稳定兼容 |
+| 图片处理 | Pillow | 剪贴板图片读取与保存 |
+| 图像文字识别 | rapidocr(ONNX 推理)+ onnxruntime,CPU 离线 | 本地识别中英文,数据不出电脑;打包体积增量约 +80MB |
 | 打包 | PyInstaller | 打包成单目录 exe,双击即用 |
 
 ## 2. 项目结构
@@ -35,6 +36,7 @@ HistoryCopy/
 │   ├── storage.py             # 数据存取模块(SQLite + 图片文件)
 │   ├── cleanup.py             # 保留期限清理模块
 │   ├── autostart.py           # 开机自启模块(注册表)
+│   ├── ocr.py                 # 图像文字识别模块(RapidOCR,懒加载)
 │   ├── settings.py            # 设置存储模块(JSON)
 │   └── ui/
 │       ├── main_window.py     # 主窗口
@@ -61,6 +63,7 @@ HistoryCopy/
 | content_type | TEXT | 'text' / 'image' |
 | content | TEXT | 文字内容(图片时为空) |
 | image_path | TEXT | 图片文件相对路径 |
+| ocr_text | TEXT | 图片识别出的文字(图片未识别时为空) |
 | fingerprint | TEXT | 内容 MD5 指纹(去重依据) |
 | created_at | TEXT | 首次创建时间(ISO 格式) |
 | updated_at | TEXT | 最后复制时间(排序依据) |
@@ -110,11 +113,22 @@ HistoryCopy/
 - 启动时执行一次清理,并每 24 小时执行一次
 - 条件:未置顶且最后更新时间早于保留期限;置顶记录取消置顶后按更新时间重新判定
 
+### 4.6 图像文字识别(OCR)
+
+- 采用 `rapidocr`(RapidOCR,基于 ONNX Runtime)+ `onnxruntime` CPU 推理,完全离线,数据不出电脑
+- **懒加载**:RapidOCR 引擎首次需要识别时才初始化(首次加载模型需 1~2 秒),避免程序启动变慢
+- **手动触发**:仅在用户点击图片卡片上"识别文字"按钮时才执行;一次同一时间只识别一张,用独立线程执行避免卡界面
+- **结果缓存**:识别结果写入 `clip_items.ocr_text`,同一图片再次点击直接显示缓存,不重复识别
+- **界面**:"识别文字"按钮位于图片卡片右下角操作区;识别中按钮显示"识别中…"不可重复点击;完成弹出结果对话框,可一键复制
+- 识别能力:中英文印刷体为主;手写/模糊/严重倾斜图片可能不准(OCR 通用局限)
+
 ## 5. 依赖清单 (requirements.txt)
 
 ```
 PySide6>=6.6
 Pillow>=10.0
+rapidocr>=2.0        # 图像文字识别(离线 ONNX)
+onnxruntime>=1.17    # rapidocr 推理引擎(rapidocr>=2.0.6 起需单独安装)
 pyinstaller>=6.0    # 仅打包时使用
 ```
 
@@ -123,6 +137,7 @@ pyinstaller>=6.0    # 仅打包时使用
 - PyInstaller `--noconsole` 隐藏命令行窗口,打包成单文件夹
 - exe 放置于 `build/` 下
 - 数据目录与 exe 同级(首启自动创建)
+- OCR 需在打包时包含 rapidocr 模型与配置文件(使用 `--collect-all rapidocr` 或手动添加 data)
 
 ## 7. 风险与对策
 

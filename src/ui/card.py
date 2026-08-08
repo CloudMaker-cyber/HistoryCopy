@@ -5,6 +5,7 @@ import html
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -18,6 +19,37 @@ from utils import format_time
 _MAX_PREVIEW_CHARS = 200
 _MAX_IMAGE_W = 200
 _MAX_IMAGE_H = 160
+
+
+_ZWSP = "\u200b"
+_LONG_TOKEN_LIMIT = 30
+
+
+def _break_long_tokens(content: str) -> str:
+    """在连续无空格的超长段中插入零宽换行符,使 QLabel 能按字符断行。
+
+    原因:QLabel 自动换行按"单词"断行,遇到超长无空格串(网址/代码/base64)
+    不会断行,导致卡片最小宽度被撑破容器。零宽字符不影响显示与复制。
+    """
+    parts = []
+    buf = []
+    buf_len = 0
+    for ch in content:
+        if ch.isspace():
+            if buf:
+                parts.append("".join(buf))
+                buf, buf_len = [], 0
+            parts.append(ch)
+        else:
+            buf.append(ch)
+            buf_len += 1
+            if buf_len >= _LONG_TOKEN_LIMIT:
+                parts.append("".join(buf))
+                parts.append(_ZWSP)
+                buf, buf_len = [], 0
+    if buf:
+        parts.append("".join(buf))
+    return "".join(parts)
 
 
 def _highlight_text(content: str, keyword: str) -> str:
@@ -44,6 +76,8 @@ class HistoryCard(QFrame):
     pin_requested = Signal(int)
     delete_requested = Signal(int)
     preview_requested = Signal(int)
+    ocr_requested = Signal(int)
+    selection_toggled = Signal(int, bool)
 
     def __init__(self, item: dict, keyword: str = "", parent=None):
         super().__init__(parent)
@@ -52,6 +86,8 @@ class HistoryCard(QFrame):
         self._preview = None
         self._full_text = ""
         self._display_plain = ""
+        self._selection_mode = False
+        self._checked = False
         self._build()
         self._install_click_filter()
         self.setCursor(Qt.PointingHandCursor)
@@ -59,13 +95,25 @@ class HistoryCard(QFrame):
 
     def _build(self):
         v = QVBoxLayout(self)
-        v.setContentsMargins(12, 10, 12, 8)
+        v.setContentsMargins(8, 10, 8, 8)
         v.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self._checkbox = QCheckBox()
+        self._checkbox.setObjectName("cardCheck")
+        self._checkbox.setFixedSize(18, 18)
+        self._checkbox.setEnabled(False)
+        self._checkbox.setVisible(False)
+        self._checkbox.stateChanged.connect(self._on_checkbox)
+        head.addWidget(self._checkbox)
 
         if self.item.get("is_pinned"):
             badge = QLabel("📌 置顶")
             badge.setObjectName("pinBadge")
-            v.addWidget(badge)
+            head.addWidget(badge)
+        head.addStretch(1)
+        v.addLayout(head)
 
         if self.item["content_type"] == "text":
             self._full_text = self.item["content"] or ""
@@ -73,8 +121,11 @@ class HistoryCard(QFrame):
             if len(display) > _MAX_PREVIEW_CHARS:
                 display = display[:_MAX_PREVIEW_CHARS] + "…"
             self._display_plain = display
+            # 对超长无空格段插入零宽换行符,防止撑破卡片宽度。
+            display = _break_long_tokens(display)
             preview = QLabel()
             preview.setObjectName("cardText")
+            preview.setMinimumWidth(0)
             preview.setWordWrap(True)
             if self._keyword and self._keyword.lower() in self._full_text.lower():
                 preview.setTextFormat(Qt.RichText)
@@ -92,6 +143,7 @@ class HistoryCard(QFrame):
             thumb.setObjectName("cardImage")
             thumb.setAlignment(Qt.AlignCenter)
             thumb.setMinimumHeight(40)
+            thumb.setMaximumWidth(_MAX_IMAGE_W)
             pixmap = QPixmap(self.item["image_abs"])
             if not pixmap.isNull():
                 pixmap = pixmap.scaled(
@@ -121,16 +173,60 @@ class HistoryCard(QFrame):
         btn_delete.setObjectName("btnMiniDanger")
         btn_delete.clicked.connect(lambda: self.delete_requested.emit(self.item["id"]))
 
+        self._btn_copy = btn_copy
+        self._btn_pin = btn_pin
+        self._btn_delete = btn_delete
+        self._btn_preview = None
+        self._btn_ocr = None
+
         bottom.addWidget(btn_copy)
         if self.item["content_type"] == "image":
             btn_preview = QPushButton("预览")
             btn_preview.setObjectName("btnMini")
             btn_preview.clicked.connect(
                 lambda: self.preview_requested.emit(self.item["id"]))
+            btn_ocr = QPushButton("识别")
+            btn_ocr.setObjectName("btnOcr")
+            btn_ocr.clicked.connect(
+                lambda: self.ocr_requested.emit(self.item["id"]))
+            self._btn_preview = btn_preview
+            self._btn_ocr = btn_ocr
             bottom.addWidget(btn_preview)
+            bottom.addWidget(btn_ocr)
         bottom.addWidget(btn_pin)
         bottom.addWidget(btn_delete)
         v.addLayout(bottom)
+
+    # --- 多选模式 ---
+
+    def set_selection_mode(self, active: bool) -> None:
+        """进入/退出多选模式:显示勾选框,隐藏操作按钮。"""
+        self._selection_mode = active
+        self._checkbox.setVisible(active)
+        self._checkbox.setEnabled(active)
+        self._btn_copy.setVisible(not active)
+        self._btn_pin.setVisible(not active)
+        self._btn_delete.setVisible(not active)
+        if self._btn_preview is not None:
+            self._btn_preview.setVisible(not active)
+            self._btn_ocr.setVisible(not active)
+
+    def set_checked(self, checked: bool) -> None:
+        """设置勾选状态(不触发 stateChanged 信号循环)。"""
+        self._checked = bool(checked)
+        self._checkbox.blockSignals(True)
+        self._checkbox.setChecked(self._checked)
+        self._checkbox.blockSignals(False)
+
+    def set_ocr_busy(self, busy: bool) -> None:
+        """识别中禁用"识别文字"按钮,防止重复点击。"""
+        if self._btn_ocr is not None:
+            self._btn_ocr.setEnabled(not busy)
+            self._btn_ocr.setText("识别中…" if busy else "识别")
+
+    def _on_checkbox(self, state: int) -> None:
+        self._checked = state == Qt.Checked
+        self.selection_toggled.emit(self.item["id"], self._checked)
 
     def _install_click_filter(self):
         for child in self.findChildren(QWidget):
@@ -138,9 +234,16 @@ class HistoryCard(QFrame):
                 child.installEventFilter(self)
         self.installEventFilter(self)
 
+    def _toggle_selection(self) -> None:
+        if self._selection_mode:
+            self.set_checked(not self._checked)
+            self.selection_toggled.emit(self.item["id"], self._checked)
+        else:
+            self.clicked.emit(self.item["id"])
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.item["id"])
+            self._toggle_selection()
         super().mousePressEvent(event)
 
     def resizeEvent(self, event):
@@ -161,7 +264,7 @@ class HistoryCard(QFrame):
         if (event.type() == QEvent.MouseButtonPress
                 and event.button() == Qt.LeftButton
                 and not isinstance(obj, QPushButton)):
-            self.clicked.emit(self.item["id"])
+            self._toggle_selection()
             event.accept()
             return True
         return super().eventFilter(obj, event)
