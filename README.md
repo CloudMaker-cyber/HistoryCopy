@@ -47,6 +47,7 @@ python src/main.py
 
 ```bash
 build.bat
+# 等价于:python -m PyInstaller --noconfirm HistoryCopy.spec(内含 OCR 模型收集)
 ```
 
 产物位于 `dist\HistoryCopy.exe`(首次启动需等待数秒解压,属正常现象)。
@@ -76,11 +77,12 @@ HistoryCopy/
 - [技术方案](docs/tech-spec.md)
 - [界面设计规范](docs/design-spec.md)
 - [开发计划](docs/dev-plan.md)
+- [技术学习指南(面向自学)](docs/learn-tech.md)
 
 ## ⚠️ 已知说明
 
 - 本地"图片文件"的复制(如资源管理器里选中图片 Ctrl+C)进剪贴板的是文件引用,
-  软件目前记录的是"图片内容"(网页复制图片、截图等),本地图片文件记录可作为后续功能。
+  软件目前记录的是"图片内容"(网页复制图片、截图等位图/PNG 内容),本地图片文件记录可作为后续功能。
 - 图片文字识别为**离线识别**,首次识别需等待 1~2 秒加载模型,之后很快;模糊、
   手写或严重倾斜的图片可能识别不准(OCR 通用局限)。
 - PyInstaller 打包的 exe 可能被部分杀毒软件误报,选择信任即可。

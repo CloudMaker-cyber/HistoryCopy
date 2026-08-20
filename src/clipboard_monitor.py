@@ -15,9 +15,15 @@ WM_DESTROY = 0x0002
 HWND_MESSAGE = -3
 CF_UNICODETEXT = 13
 CF_DIB = 8
+CF_DIBV5 = 17
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+# PNG 是"注册格式"(格式名 "PNG"),现代浏览器/Edge"复制图片"常只提供它。
+user32.RegisterClipboardFormatW.restype = ctypes.c_uint
+user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+CF_PNG = user32.RegisterClipboardFormatW("PNG")
 
 # --- 类型与函数签名声明(避免 64 位指针截断) ---
 
@@ -65,6 +71,9 @@ kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
 
 kernel32.GlobalSize.restype = ctypes.c_size_t
 kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+
+kernel32.GlobalFree.restype = wintypes.HGLOBAL
+kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
 
 user32.RegisterClassW.restype = wintypes.ATOM
 user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
@@ -142,17 +151,14 @@ def get_clipboard_text() -> str | None:
         user32.CloseClipboard()
 
 
-def get_clipboard_image():
-    """读取剪贴板图片,返回 PIL Image;无图片时返回 None。
-
-    只支持位图格式(CF_DIB),覆盖截图、浏览器图片、画图等常见来源。
-    """
-    if not user32.IsClipboardFormatAvailable(CF_DIB):
+def _read_clipboard_bytes(fmt: int) -> bytes | None:
+    """读取剪贴板指定格式的原始字节,无数据或失败时返回 None。"""
+    if not user32.IsClipboardFormatAvailable(fmt):
         return None
     if not user32.OpenClipboard(None):
         return None
     try:
-        handle = user32.GetClipboardData(CF_DIB)
+        handle = user32.GetClipboardData(fmt)
         if not handle:
             return None
         size = kernel32.GlobalSize(handle)
@@ -162,20 +168,35 @@ def get_clipboard_image():
         if not ptr:
             return None
         try:
-            raw = ctypes.string_at(ptr, size)
+            return ctypes.string_at(ptr, size)
         finally:
             kernel32.GlobalUnlock(handle)
     finally:
         user32.CloseClipboard()
 
+
+def get_clipboard_image():
+    """读取剪贴板图片,返回 PIL Image;无图片时返回 None。
+
+    依次尝试位图(DIB / DIBV5)与 PNG,覆盖截图、浏览器/网页复制图片(仅 PNG)、
+    画图等常见来源;同一次剪贴板里存在多个格式时按顺序取第一个能解码的。
+    """
     from PIL import Image
     import io
-    try:
-        img = Image.open(io.BytesIO(raw))
-        img.load()
-        return img
-    except Exception:
-        return None
+
+    raws = []
+    for fmt in (CF_DIB, CF_DIBV5, CF_PNG):
+        raw = _read_clipboard_bytes(fmt)
+        if raw:
+            raws.append(raw)
+    for raw in raws:
+        try:
+            img = Image.open(io.BytesIO(raw))
+            img.load()
+            return img
+        except Exception:
+            continue
+    return None
 
 
 # --- 剪贴板写入(测试与"复制回剪贴板"功能使用) ---
@@ -194,17 +215,18 @@ def set_clipboard_text(text: str) -> bool:
         handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE | _GMEM_ZEROINIT, len(data))
         if not handle:
             return False
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            kernel32.GlobalFree(handle)
+            return False
         try:
-            ptr = kernel32.GlobalLock(handle)
-            if not ptr:
-                return False
-            try:
-                ctypes.memmove(ptr, data, len(data))
-            finally:
-                kernel32.GlobalUnlock(handle)
-            return bool(user32.SetClipboardData(CF_UNICODETEXT, handle))
+            ctypes.memmove(ptr, data, len(data))
         finally:
-            pass
+            kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            kernel32.GlobalFree(handle)
+            return False
+        return True
     finally:
         user32.CloseClipboard()
 
@@ -228,17 +250,18 @@ def set_clipboard_image(image) -> bool:
         handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE | _GMEM_ZEROINIT, len(dib))
         if not handle:
             return False
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            kernel32.GlobalFree(handle)
+            return False
         try:
-            ptr = kernel32.GlobalLock(handle)
-            if not ptr:
-                return False
-            try:
-                ctypes.memmove(ptr, dib, len(dib))
-            finally:
-                kernel32.GlobalUnlock(handle)
-            return bool(user32.SetClipboardData(CF_DIB, handle))
+            ctypes.memmove(ptr, dib, len(dib))
         finally:
-            pass
+            kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_DIB, handle):
+            kernel32.GlobalFree(handle)
+            return False
+        return True
     finally:
         user32.CloseClipboard()
 
@@ -246,28 +269,50 @@ def set_clipboard_image(image) -> bool:
 # --- 监听器 ---
 
 class ClipboardMonitor:
-    """后台监听剪贴板变化,变化时回调 on_change。"""
+    """后台监听剪贴板变化,变化时回调 on_change。
+
+    回调由一个常驻 worker 串行执行:短时间内多次剪贴板变化会合并成一次唤醒
+    (事件驱动、不轮询),既避免"每次变化都新开线程"的堆积,也避免多个线程
+    并发读取进程级互斥的剪贴板而偶发漏读。
+    """
 
     def __init__(self, on_change=None):
         self.on_change = on_change
         self._wndproc = WNDPROC(self._wnd_proc)
         self._hwnd = None
         self._thread = None
+        self._worker = None
+        self._wake = threading.Event()
+        self._stop = threading.Event()
         self._ready = threading.Event()
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == WM_CLIPBOARDUPDATE:
-            self._notify()
+            self._wake.set()
         elif msg == WM_DESTROY:
             user32.PostQuitMessage(0)
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
-    def _notify(self):
-        if self.on_change:
-            threading.Thread(target=self.on_change, daemon=True).start()
+    def _worker_loop(self):
+        while not self._stop.is_set():
+            self._wake.wait()
+            if self._stop.is_set():
+                return
+            self._wake.clear()
+            cb = self.on_change
+            if not cb:
+                continue
+            try:
+                cb()
+            except Exception as exc:  # noqa: BLE001
+                from utils import log_error
+                log_error("clipboard_monitor 回调异常: %r" % (exc,))
 
     def start(self):
-        """在后台线程启动消息循环。"""
+        """在后台线程启动监听消息循环与回调 worker。"""
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True,
+                                        name="clipboard-worker")
+        self._worker.start()
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name="clipboard-monitor")
         self._thread.start()
@@ -307,5 +352,7 @@ class ClipboardMonitor:
 
     def stop(self):
         """停止监听。"""
+        self._stop.set()
+        self._wake.set()
         if self._hwnd:
             user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)

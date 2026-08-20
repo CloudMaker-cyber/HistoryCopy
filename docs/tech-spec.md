@@ -85,7 +85,8 @@ HistoryCopy/
 ### 4.1 剪贴板监听
 
 - 通过 Windows `AddClipboardFormatListener` 注册窗口消息监听
-- 收到剪贴板变化消息后,读取文字(CF_UNICODETEXT)与图片(Bitmap)
+- 收到剪贴板变化消息后,读取文字(CF_UNICODETEXT)与图片(依次尝试位图 DIB/DIBV5、PNG,现代浏览器"复制图片"常只提供 PNG)
+- 回调由**单 worker 线程串行**执行:短时间内的多次剪贴板变化合并为一次唤醒,避免线程堆积与并发读取进程级互斥剪贴板导致偶发漏读
 - 去重:与最近一条记录比较,相同则更新 `updated_at` 不新增
 
 ### 4.2 保留期限清理
@@ -122,6 +123,12 @@ HistoryCopy/
 - **界面**:"识别文字"按钮位于图片卡片右下角操作区;识别中按钮显示"识别中…"不可重复点击;完成弹出结果对话框,可一键复制
 - 识别能力:中英文印刷体为主;手写/模糊/严重倾斜图片可能不准(OCR 通用局限)
 
+### 4.7 卡片宽度防护(防"列表被撑宽")
+
+- 文字预览 `QLabel` 对超长无空格串(网址/代码/base64 等)通过 `_break_long_tokens` 每 30 个字符插入一个**零宽断行符(U+200B)**,使其能按字符折行,避免卡片被单个长"单词"撑宽。
+- 特别处理**不换行空格**(U+00A0、U+2007、U+202F,网页/Office 复制常见):它们会被算进长段计长,并在其后补零宽断行符,防止整段变成无法折行的超长单词。
+- 兜底约束:主窗口列表布局设置 `setSizeConstraint(QLayout.SetNoConstraint)`,列表容器永远跟随可视区宽度;即使出现极端无法折行的内容,最坏也只是该卡片内截断(悬停可看全文),不会影响其他卡片。
+
 ## 5. 依赖清单 (requirements.txt)
 
 ```
@@ -134,10 +141,10 @@ pyinstaller>=6.0    # 仅打包时使用
 
 ## 6. 打包方案
 
-- PyInstaller `--noconsole` 隐藏命令行窗口,打包成单文件夹
-- exe 放置于 `build/` 下
+- 统一使用 `HistoryCopy.spec` 打包:`python -m PyInstaller --noconfirm HistoryCopy.spec`(或双击 `build.bat`)
+- `HistoryCopy.spec` 收集 rapidocr 模型/config.yaml(`collect_data_files`)、隐藏导入 onnxruntime,并排除 matplotlib/PyQt5 等冲突依赖
+- PyInstaller `console=False` 隐藏命令行窗口,打包成单文件 exe,产物位于 `dist/`
 - 数据目录与 exe 同级(首启自动创建)
-- OCR 需在打包时包含 rapidocr 模型与配置文件(使用 `--collect-all rapidocr` 或手动添加 data)
 
 ## 7. 风险与对策
 

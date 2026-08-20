@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -156,6 +157,9 @@ class MainWindow(QWidget):
         self._list_layout.setContentsMargins(2, 6, 2, 6)
         self._list_layout.setSpacing(10)
         self._list_layout.addStretch(1)
+        # 不允许任何一张卡片的最小宽度把容器撑得比可视区更宽:
+        # 极端长内容只会在卡片内截断(悬停可看全文),而不是让所有卡片一起变宽。
+        self._list_layout.setSizeConstraint(QLayout.SetNoConstraint)
         self._scroll.setWidget(self._container)
         shell_l.addWidget(self._scroll, 1)
 
@@ -203,6 +207,8 @@ class MainWindow(QWidget):
             card.set_selection_mode(self._selection_mode)
             if self._selection_mode:
                 card.set_checked(item["id"] in self._selected_ids)
+            if item["id"] in self._ocr_in_progress:
+                card.set_ocr_busy(True)
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
             shown += 1
 

@@ -23,6 +23,11 @@ _MAX_IMAGE_H = 160
 
 _ZWSP = "\u200b"
 _LONG_TOKEN_LIMIT = 30
+# QLabel 会在此断行的空白:普通空格、制表符、回车换行等。
+_BREAKABLE_SPACE = frozenset(" \t\n\r\f\v")
+# Qt 视为"不换行空格"(网页/Office 复制文本常见),QLabel 不会在此折行,
+# 必须按普通字符计长并补零宽空格,否则整段会变成一个无法断行的超长单词。
+_NOBREAK_SPACE = frozenset("\u00a0\u2007\u202f")
 
 
 def _break_long_tokens(content: str) -> str:
@@ -30,12 +35,13 @@ def _break_long_tokens(content: str) -> str:
 
     原因:QLabel 自动换行按"单词"断行,遇到超长无空格串(网址/代码/base64)
     不会断行,导致卡片最小宽度被撑破容器。零宽字符不影响显示与复制。
+    注意:不换行空格也应计长,并在其后补零宽空格使其成为可断行点。
     """
     parts = []
     buf = []
     buf_len = 0
     for ch in content:
-        if ch.isspace():
+        if ch in _BREAKABLE_SPACE:
             if buf:
                 parts.append("".join(buf))
                 buf, buf_len = [], 0
@@ -46,6 +52,10 @@ def _break_long_tokens(content: str) -> str:
             if buf_len >= _LONG_TOKEN_LIMIT:
                 parts.append("".join(buf))
                 parts.append(_ZWSP)
+                buf, buf_len = [], 0
+            if ch in _NOBREAK_SPACE:
+                # 不换行空格 Qt 不会断开,补零宽空格让文字能在此折行。
+                parts.append("".join(buf) + _ZWSP)
                 buf, buf_len = [], 0
     if buf:
         parts.append("".join(buf))

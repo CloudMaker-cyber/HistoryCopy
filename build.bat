@@ -1,5 +1,5 @@
 @echo off
-REM 打包脚本:生成图标并用 PyInstaller 打成单个 exe
+REM 打包脚本:生成图标并用 PyInstaller 按 HistoryCopy.spec 打包(含 OCR 模型)
 cd /d "%~dp0"
 
 echo [1/2] 生成图标 icon.ico ...
@@ -7,23 +7,7 @@ python src\build_icon.py
 if errorlevel 1 goto :err
 
 echo [2/2] PyInstaller 打包(可能需要几分钟)...
-python -m PyInstaller --noconfirm --clean --windowed --onefile ^
-  --name HistoryCopy --icon icon.ico ^
-  --paths src ^
-  --hidden-import app ^
-  --hidden-import recorder ^
-  --hidden-import clipboard_monitor ^
-  --hidden-import storage ^
-  --hidden-import settings ^
-  --hidden-import autostart ^
-  --hidden-import cleanup ^
-  --hidden-import ui.theme ^
-  --hidden-import ui.icon ^
-  --hidden-import ui.card ^
-  --hidden-import ui.preview ^
-  --hidden-import ui.main_window ^
-  --hidden-import ui.settings_dialog ^
-  src\main.py
+python -m PyInstaller --noconfirm HistoryCopy.spec
 if errorlevel 1 goto :err
 
 echo.
