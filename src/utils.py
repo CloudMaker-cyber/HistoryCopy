@@ -64,7 +64,8 @@ def format_time(ts: str | None) -> str:
         return "今天 " + hhmm
     if d.date() == today - datetime.timedelta(days=1):
         return "昨天 " + hhmm
-    return d.strftime("%Y-%m-%d %H:%M")
+    # 年份从当前记录里可推断,省略年以节省按钮行宽度(见 devlog 2026-08-20)。
+    return d.strftime("%m-%d %H:%M")
 
 
 def log_error(message: str) -> None:

@@ -150,7 +150,7 @@ QPushButton#btnMini {{
     background: transparent;
     border: 1px solid {c["divider"]};
     border-radius: 6px;
-    padding: 3px 10px;
+    padding: 3px 8px;
     color: {c["text_main"]};
     font-size: 11px;
 }}
@@ -162,7 +162,7 @@ QPushButton#btnMiniDanger {{
     background: transparent;
     border: 1px solid {c["divider"]};
     border-radius: 6px;
-    padding: 3px 10px;
+    padding: 3px 8px;
     color: {c["danger"]};
     font-size: 11px;
 }}
@@ -174,7 +174,7 @@ QPushButton#btnOcr {{
     background: {c["primary"]};
     border: 1px solid {c["primary"]};
     border-radius: 6px;
-    padding: 3px 10px;
+    padding: 3px 8px;
     color: #FFFFFF;
     font-size: 11px;
 }}

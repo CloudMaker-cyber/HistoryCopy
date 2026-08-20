@@ -123,6 +123,11 @@ class HistoryCard(QFrame):
             badge.setObjectName("pinBadge")
             head.addWidget(badge)
         head.addStretch(1)
+        # 时间放在头部行(右侧),底部按钮行不再塞时间,避免按钮行总宽
+        # 超出 420px 窗口下的可视宽度、把"删除"按钮顶出卡片(见 devlog 2026-08-20)。
+        head_time = QLabel(format_time(self.item["updated_at"]))
+        head_time.setObjectName("cardTime")
+        head.addWidget(head_time)
         v.addLayout(head)
 
         if self.item["content_type"] == "text":
@@ -165,10 +170,7 @@ class HistoryCard(QFrame):
             v.addWidget(thumb)
 
         bottom = QHBoxLayout()
-        bottom.setSpacing(8)
-        time_label = QLabel(format_time(self.item["updated_at"]))
-        time_label.setObjectName("cardTime")
-        bottom.addWidget(time_label)
+        bottom.setSpacing(6)
         bottom.addStretch(1)
 
         btn_copy = QPushButton("复制")

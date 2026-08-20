@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -157,6 +158,9 @@ class MainWindow(QWidget):
         self._list_layout.setContentsMargins(2, 6, 2, 6)
         self._list_layout.setSpacing(10)
         self._list_layout.addStretch(1)
+        # 容器横向尺寸策略设为 Ignored,使其宽度恒定等于可视区宽度,
+        # 任何卡片内容都不会再把列表撑出可视宽度(见 devlog 2026-08-20)。
+        self._container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         # 不允许任何一张卡片的最小宽度把容器撑得比可视区更宽:
         # 极端长内容只会在卡片内截断(悬停可看全文),而不是让所有卡片一起变宽。
         self._list_layout.setSizeConstraint(QLayout.SetNoConstraint)
